@@ -1,5 +1,8 @@
+library(dplyr)
 library(terra)
 library(data.table)
+library(readxl)
+library(purrr)
 
 #the goal is to crop all plots
 #extracted the 400m2 raster (and a buffered 800m2 version)
@@ -22,110 +25,88 @@ for (file in file_list) {
 
 #centre coordinates####
 
-aremark_typical <- terra::vect(cbind(c(11.6690),
-                                     c(59.2290)), 
-                               crs="+proj=longlat")
+#dynamically parse plot center coordinates from inventory spreadsheet
+#ultimately, these hyperspectral plots will be aligned with the inventory
 
-aremark_limited <- terra::vect(cbind(c(11.6520),
-                                     c(59.2330)), 
-                               crs="+proj=longlat")
+inventory <- "C:/Users/rakuz6966/OneDrive - Norwegian University of Life Sciences/Desktop/0_forests4society_forestinventory.xlsx"
 
+selected_sheets <- c("plot1(ref)", "plot2(dry)",                  
+                     "plot3(ref)", "plot4(dry)", "plot5(ref)",                  
+                     "plot6(dry)", "plot7(ref)", "plot8(dry) ",                 
+                     "plot9(ref)", "plot10(dry)", "plot11(ref)",                 
+                     "plot12(dry)", "plot13(ref)", "pot14(dry)",                  
+                     "plot15(ref)","plot16(dry)","plot17(ref)",
+                     "plot18(dry)", "plot19(ref)","plot20(dry)")
 
-asnes_typical <- terra::vect(cbind(c(12.357),
-                                   c(60.624)),
-                             crs="+proj=longlat")
+#read metadata and loop tree inventory sheets
+meta_sheet <- read_excel(inventory, sheet = "coordinates and instal dates", col_types = "text") %>%
+  janitor::clean_names()
 
-asnes_limited <- terra::vect(cbind(c(12.355),
-                                   c(60.624)),
-                             crs="+proj=longlat")
-
-
-eidskog_typical <- terra::vect(cbind(c(11.8280),
-                                     c(59.9240)), 
-                               crs="+proj=longlat")
-
-eidskog_limited <- terra::vect(cbind(c(11.8320),
-                                     c(59.9230)), 
-                               crs="+proj=longlat")
-
-
-
-elval_typical <- terra::vect(cbind(c(10.8890),
-                                   c(61.9200)), 
-                             crs="+proj=longlat")
-
-elval_limited <- terra::vect(cbind(c(10.8900),
-                                   c(61.9200)), 
-                             crs="+proj=longlat")
-
-
-elverum_typical <- terra::vect(cbind(c(11.4700),
-                                     c(60.9480)), 
-                               crs="+proj=longlat")
-
-elverum_limited <- terra::vect(cbind(c(11.4670),
-                                     c(60.9470)), 
-                               crs="+proj=longlat")
-
-
-finsted_typical <- terra::vect(cbind(c(11.0060),
-                                     c(62.1230)), 
-                               crs="+proj=longlat")
-
-finsted_limited <- terra::vect(cbind(c(11.0050),
-                                     c(62.1240)), 
-                               crs="+proj=longlat")
-
-
-koppang_typical <- terra::vect(cbind(c(11.1630),
-                                     c(61.5930)), 
-                               crs="+proj=longlat")
-
-koppang_limited <- terra::vect(cbind(c(11.1610),
-                                     c(61.5930)), 
-                               crs="+proj=longlat")
-
-
-rena_typical <- terra::vect(cbind(c(11.2220),
-                                  c(61.2740)), 
-                            crs="+proj=longlat")
-
-rena_limited <- terra::vect(cbind(c(11.2170),
-                                  c(61.2720)), 
-                            crs="+proj=longlat")
-
-
-romskog_typical <- terra::vect(cbind(c(11.9170),
-                                     c(59.7140)), 
-                               crs="+proj=longlat")
-
-romskog_limited <- terra::vect(cbind(c(11.9210),
-                                     c(59.7160)), 
-                               crs="+proj=longlat")
-
-
-valer_typical <- terra::vect(cbind(c(10.8740),
-                                   c(59.5160)), 
-                             crs="+proj=longlat")
-
-valer_limited <- terra::vect(cbind(c(10.8730),
-                                   c(59.5100)), 
-                             crs="+proj=longlat")
-
-
-#combine point vectors into a single named list
-plots <- list(
-  aremark_typical = aremark_typical, aremark_limited = aremark_limited,
-  asnes_typical   = asnes_typical,   asnes_limited   = asnes_limited,
-  eidskog_typical = eidskog_typical, eidskog_limited = eidskog_limited,
-  elval_typical   = elval_typical,   elval_limited   = elval_limited,
-  elverum_typical = elverum_typical, elverum_limited = elverum_limited,
-  finsted_typical = finsted_typical, finsted_limited = finsted_limited,
-  koppang_typical = koppang_typical, koppang_limited = koppang_limited,
-  rena_typical    = rena_typical,    rena_limited    = rena_limited,
-  romskog_typical = romskog_typical, romskog_limited = romskog_limited,
-  valer_typical   = valer_typical,   valer_limited   = valer_limited
+combined_inventory <- map_df(
+  selected_sheets,
+  function(s) {
+    read_excel(inventory, sheet = s, col_types = "text")
+  },
+  .id = "sheet_name"
 )
+
+#tidy up metadata
+#clean and parse metadata
+meta_clean <- meta_sheet %>%
+  filter(!grepl("Plot|number|EUREF|UTM", x1, ignore.case = TRUE)) %>%
+  filter(!is.na(x1)) %>%
+  mutate(
+    Plot_number = stringr::str_trim(as.character(x1)),
+    site        = stringr::str_to_lower(stringr::str_trim(x2)),
+    
+    #clean text strings before matching to capture typos
+    raw_treatment = stringr::str_to_lower(stringr::str_trim(x3)),
+    
+    #map raw text values cleanly
+    treatment   = case_when(
+      raw_treatment %in% c("reference", "ref", "plot1(ref)", "typical") ~ "typical",
+      raw_treatment %in% c("dry", "limited")                            ~ "limited",
+      TRUE                                                              ~ raw_treatment
+    ),
+    plot_E      = as.numeric(from_gnss),
+    plot_N      = as.numeric(x5) 
+  ) %>%
+  select(Plot_number, site, treatment, plot_E, plot_N)
+
+#clean the naming tags to match conventions
+meta_spatial_prep <- meta_clean %>%
+  filter(!is.na(plot_E) & !is.na(plot_N)) %>%
+  mutate(
+    clean_site = case_when(
+      site == "finstad north" ~ "finsted",
+      site == "elvål south"   ~ "elval",
+      site == "rømskog"       ~ "romskog",
+      site == "våler"         ~ "valer",
+      site == "åsnes"         ~ "asnes",
+      TRUE                    ~ site
+    ),
+    #generates a clean key strictly ending in _typical or _limited
+    plot_name_key = paste(clean_site, treatment, sep = "_")
+  )
+
+#build the named list of terra vectors
+plots <- list()
+
+for (i in 1:nrow(meta_spatial_prep)) {
+  row_data <- meta_spatial_prep[i, ]
+  
+  #bind the UTM coordinates
+  plot_vector <- terra::vect(
+    cbind(row_data$plot_E, row_data$plot_N), 
+    type = "points",
+    crs  = "EPSG:25832" # ETRS89 / UTM zone 32N
+  )
+  
+  #assign to list matching exact lower loop variable structure
+  plots[[row_data$plot_name_key]] <- plot_vector
+}
+
+cat("Successfully generated named list for", length(plots), "plots with valid EPSG structures.\n")
 
 #calculate the specific radii needed for the target areas
 r_400 <- sqrt(400 / pi) # ~11.284 meters
@@ -151,8 +132,8 @@ for (plot_name in names(plots)) {
     buf_400 <- terra::buffer(point_projected, width = r_400)
     buf_800 <- terra::buffer(point_projected, width = r_800)
     
-    # crop to the bounding box of the 800m2 plot 
-    #this prevents R from wasting memory smoothing the entire massive mosaic
+    #crop to the bounding box of the 800m2 plot 
+    # this prevents R from wasting memory smoothing the entire massive mosaic
     raster_local <- terra::crop(raster_obj, buf_800)
     
     #subdivide 1.25m pixels into 0.25m pixels using bilinear interpolation
@@ -163,7 +144,7 @@ for (plot_name in names(plots)) {
     cropped_400 <- terra::crop(raster_smooth, buf_400, mask = TRUE)
     cropped_800 <- terra::crop(raster_smooth, buf_800, mask = TRUE)
     
-    #save the output clipped rasters back into your global environment
+    #save the output clipped rasters back into the global environment
     assign(paste0(plot_name, "_400m2"), cropped_400, envir = .GlobalEnv)
     assign(paste0(plot_name, "_800m2"), cropped_800, envir = .GlobalEnv)
     
@@ -173,46 +154,10 @@ for (plot_name in names(plots)) {
   }
 }
 
-#check resolution and dimensions
-res(rena_typical_400m2)
-dim(rena_typical_400m2)
-
-#keep original pixel size
-# for (plot_name in names(plots)) {
-#   
-#   #determine which raster corresponds to this plot based on the prefix name
-#   # (e.g., "aremark_typical" looks for an object named "aremark_hyperspec_mosaic")
-#   site_prefix <- sub("_(typical|limited)$", "", plot_name)
-#   raster_name <- paste0(site_prefix, "_hyperspec_mosaic")
-#   
-#   #check if the target raster actually exists in your R environment
-#   if (exists(raster_name, envir = .GlobalEnv)) {
-#     raster_obj <- get(raster_name, envir = .GlobalEnv)
-#     point_obj  <- plots[[plot_name]]
-#     
-#     #reproject the longlat point to match the specific raster's CRS
-#     point_projected <- terra::project(point_obj, terra::crs(raster_obj))
-#     
-#     #create the circular buffers in meters
-#     buf_400 <- terra::buffer(point_projected, width = r_400)
-#     buf_800 <- terra::buffer(point_projected, width = r_800)
-#     
-#     #crop and mask the rasters to the circles (mask = TRUE makes the outside NA)
-#     cropped_400 <- terra::crop(raster_obj, buf_400, mask = TRUE)
-#     cropped_800 <- terra::crop(raster_obj, buf_800, mask = TRUE)
-#     
-#     #save the output clipped rasters back into your global environment
-#     assign(paste0(plot_name, "_400m2"), cropped_400, envir = .GlobalEnv)
-#     assign(paste0(plot_name, "_800m2"), cropped_800, envir = .GlobalEnv)
-#     
-#     message("Successfully extracted plots for: ", plot_name)
-#   } else {
-#     warning("Could not find matching raster object named: ", raster_name)
-#   }
-# }
-# #check resolution and dimensions
-# res(rena_typical_400m2)
-# dim(rena_typical_400m2)
+#check resolution and dimensions to confirm success
+cat("\n--- Final Validation Metrics ---\n")
+print(res(rena_typical_400m2))
+print(dim(rena_typical_400m2))
 
 #visual check####
 #define the 10 core site prefixes
@@ -268,28 +213,28 @@ dir_400 <- "R:/Users/rjkuz/transect_mosaic/plots_400m2"
 dir_800 <- "R:/Users/rjkuz/transect_mosaic/plots_800m2"
 
 #create the folders if they do not exist
-# if (!dir.exists(dir_400)) dir.create(dir_400, recursive = TRUE)
-# if (!dir.exists(dir_800)) dir.create(dir_800, recursive = TRUE)
+#if (!dir.exists(dir_400)) dir.create(dir_400, recursive = TRUE)
+#if (!dir.exists(dir_800)) dir.create(dir_800, recursive = TRUE)
 
 #get names of all objects currently in your global environment
 all_objects <- ls(envir = .GlobalEnv)
 
 #filter for SpatRasters and export them
 # for (obj_name in all_objects) {
-#   
+# 
 #   #fetch the object from environment
 #   obj <- get(obj_name, envir = .GlobalEnv)
-#   
+# 
 #   #check if it's a SpatRaster object before trying to save it, in case there are centre points in there too
 #   if (inherits(obj, "SpatRaster")) {
-#     
+# 
 #     #do the 400m2 objects
 #     if (grepl("_400m2$", obj_name)) {
 #       file_path <- file.path(dir_400, paste0(obj_name, ".tif"))
 #       terra::writeRaster(obj, filename = file_path, overwrite = TRUE)
 #       message("Saved full SpatRaster data matrix to: ", file_path)
 #     }
-#     
+# 
 #     #and now do the 800m2 objects
 #     if (grepl("_800m2$", obj_name)) {
 #       file_path <- file.path(dir_800, paste0(obj_name, ".tif"))
@@ -298,7 +243,7 @@ all_objects <- ls(envir = .GlobalEnv)
 #     }
 #   }
 # }
-# 
+
 
 #save in tables###
 #this makes a table per site_plot
@@ -306,28 +251,28 @@ all_objects <- ls(envir = .GlobalEnv)
 dir_tables <- "R:/Users/rjkuz/transect_mosaic/table_plots_400m2"
 
 #create directory if it does not exist
-# if (!dir.exists(dir_tables)) dir.create(dir_tables, recursive = TRUE)
+#if (!dir.exists(dir_tables)) dir.create(dir_tables, recursive = TRUE)
 
 #list all objects in the environment
 all_objects <- ls(envir = .GlobalEnv)
 
 #filter, extract data matrices, and save
 # for (obj_name in all_objects) {
-#   
+# 
 #   #target only the 400m2 objects, these are the actual plots
 #   if (grepl("_400m2$", obj_name)) {
 #     obj <- get(obj_name, envir = .GlobalEnv)
-#     
+# 
 #     #double check that it is a SpatRaster spatial data object
 #     if (inherits(obj, "SpatRaster")) {
-#       
-#       #convert raster pixels to a data frame (xy = TRUE keeps coordinates, 
+# 
+#       #convert raster pixels to a data frame (xy = TRUE keeps coordinates,
 #       #na.rm = TRUE drops the masked NA cells outside the circular plot boundary)
 #       pixel_table <- terra::as.data.frame(obj, xy = TRUE, na.rm = TRUE)
-#       
+# 
 #       #define output text file path
 #       csv_path <- file.path(dir_tables, paste0(obj_name, "_matrix.csv"))
-#       
+# 
 #       #save out to disk
 #       write.csv(pixel_table, file = csv_path, row.names = FALSE)
 #       message("Exported spectral matrix table: ", csv_path)
@@ -368,11 +313,213 @@ for (obj_name in all_objects) {
 # if (length(master_list) > 0) {
 #   # rbindlist handles mismatched column names or variations efficiently
 #   master_table <- data.table::rbindlist(master_list, fill = TRUE)
-#   
+# 
 #   output_path <- file.path(dir_tables, "master_plots_400m2_matrix.csv")
 #   write.csv(master_table, file = output_path, row.names = FALSE)
-#   
+# 
 #   message("Successfully compiled master matrix table at: ", output_path)
 # } else {
 #   warning("No 400m2 SpatRaster objects were found in the workspace.")
 # }
+
+#STOP here####
+#STOP here####
+#STOP here####
+
+#this is the previous approach to centre coordinates
+#I had originally tried the coordinates this way
+#but there may have been errors
+# aremark_typical <- terra::vect(cbind(c(11.6690),
+#                                      c(59.2290)), 
+#                                crs="+proj=longlat")
+# 
+# aremark_limited <- terra::vect(cbind(c(11.6520),
+#                                      c(59.2330)), 
+#                                crs="+proj=longlat")
+# 
+# 
+# asnes_typical <- terra::vect(cbind(c(12.357),
+#                                    c(60.624)),
+#                              crs="+proj=longlat")
+# 
+# asnes_limited <- terra::vect(cbind(c(12.355),
+#                                    c(60.624)),
+#                              crs="+proj=longlat")
+# 
+# 
+# eidskog_typical <- terra::vect(cbind(c(11.8280),
+#                                      c(59.9240)), 
+#                                crs="+proj=longlat")
+# 
+# eidskog_limited <- terra::vect(cbind(c(11.8320),
+#                                      c(59.9230)), 
+#                                crs="+proj=longlat")
+# 
+# 
+# 
+# elval_typical <- terra::vect(cbind(c(10.8890),
+#                                    c(61.9200)), 
+#                              crs="+proj=longlat")
+# 
+# elval_limited <- terra::vect(cbind(c(10.8900),
+#                                    c(61.9200)), 
+#                              crs="+proj=longlat")
+# 
+# 
+# elverum_typical <- terra::vect(cbind(c(11.4700),
+#                                      c(60.9480)), 
+#                                crs="+proj=longlat")
+# 
+# elverum_limited <- terra::vect(cbind(c(11.4670),
+#                                      c(60.9470)), 
+#                                crs="+proj=longlat")
+# 
+# 
+# finsted_typical <- terra::vect(cbind(c(11.0060),
+#                                      c(62.1230)), 
+#                                crs="+proj=longlat")
+# 
+# finsted_limited <- terra::vect(cbind(c(11.0050),
+#                                      c(62.1240)), 
+#                                crs="+proj=longlat")
+# 
+# 
+# koppang_typical <- terra::vect(cbind(c(11.1630),
+#                                      c(61.5930)), 
+#                                crs="+proj=longlat")
+# 
+# koppang_limited <- terra::vect(cbind(c(11.1610),
+#                                      c(61.5930)), 
+#                                crs="+proj=longlat")
+# 
+# 
+# rena_typical <- terra::vect(cbind(c(11.2220),
+#                                   c(61.2740)), 
+#                             crs="+proj=longlat")
+# 
+# rena_limited <- terra::vect(cbind(c(11.2170),
+#                                   c(61.2720)), 
+#                             crs="+proj=longlat")
+# 
+# 
+# romskog_typical <- terra::vect(cbind(c(11.9170),
+#                                      c(59.7140)), 
+#                                crs="+proj=longlat")
+# 
+# romskog_limited <- terra::vect(cbind(c(11.9210),
+#                                      c(59.7160)), 
+#                                crs="+proj=longlat")
+# 
+# 
+# valer_typical <- terra::vect(cbind(c(10.8740),
+#                                    c(59.5160)), 
+#                              crs="+proj=longlat")
+# 
+# valer_limited <- terra::vect(cbind(c(10.8730),
+#                                    c(59.5100)), 
+#                              crs="+proj=longlat")
+# 
+# 
+# #combine point vectors into a single named list
+# plots <- list(
+#   aremark_typical = aremark_typical, aremark_limited = aremark_limited,
+#   asnes_typical   = asnes_typical,   asnes_limited   = asnes_limited,
+#   eidskog_typical = eidskog_typical, eidskog_limited = eidskog_limited,
+#   elval_typical   = elval_typical,   elval_limited   = elval_limited,
+#   elverum_typical = elverum_typical, elverum_limited = elverum_limited,
+#   finsted_typical = finsted_typical, finsted_limited = finsted_limited,
+#   koppang_typical = koppang_typical, koppang_limited = koppang_limited,
+#   rena_typical    = rena_typical,    rena_limited    = rena_limited,
+#   romskog_typical = romskog_typical, romskog_limited = romskog_limited,
+#   valer_typical   = valer_typical,   valer_limited   = valer_limited
+# )
+# 
+# #calculate the specific radii needed for the target areas
+# r_400 <- sqrt(400 / pi) # ~11.284 meters
+# r_800 <- sqrt(800 / pi) # ~15.958 meters
+# 
+# #process each plot
+# #disaggregate pixels and process each plot with spatial smoothing
+# for (plot_name in names(plots)) {
+#   
+#   #determine which raster corresponds to which plot based on the prefix name
+#   site_prefix <- sub("_(typical|limited)$", "", plot_name)
+#   raster_name <- paste0(site_prefix, "_hyperspec_mosaic")
+#   
+#   #double check if the target raster actually exists
+#   if (exists(raster_name, envir = .GlobalEnv)) {
+#     raster_obj <- get(raster_name, envir = .GlobalEnv)
+#     point_obj  <- plots[[plot_name]]
+#     
+#     #reproject centre point to match the specific raster's CRS
+#     point_projected <- terra::project(point_obj, terra::crs(raster_obj))
+#     
+#     #create the circular buffers in meters
+#     buf_400 <- terra::buffer(point_projected, width = r_400)
+#     buf_800 <- terra::buffer(point_projected, width = r_800)
+#     
+#     # crop to the bounding box of the 800m2 plot 
+#     #this prevents R from wasting memory smoothing the entire massive mosaic
+#     raster_local <- terra::crop(raster_obj, buf_800)
+#     
+#     #subdivide 1.25m pixels into 0.25m pixels using bilinear interpolation
+#     #this just makes for smoother pixels in the crop to plot
+#     raster_smooth <- terra::disagg(raster_local, fact = 5, method = "bilinear")
+#     
+#     #crop and mask the newly smoothed micro-raster to the precise circular shapes
+#     cropped_400 <- terra::crop(raster_smooth, buf_400, mask = TRUE)
+#     cropped_800 <- terra::crop(raster_smooth, buf_800, mask = TRUE)
+#     
+#     #save the output clipped rasters back into your global environment
+#     assign(paste0(plot_name, "_400m2"), cropped_400, envir = .GlobalEnv)
+#     assign(paste0(plot_name, "_800m2"), cropped_800, envir = .GlobalEnv)
+#     
+#     message("Successfully extracted smoothed plots for: ", plot_name)
+#   } else {
+#     warning("Could not find matching raster object named: ", raster_name)
+#   }
+# }
+# 
+# #check resolution and dimensions
+# res(rena_typical_400m2)
+# dim(rena_typical_400m2)
+
+#above, pixels were made smalled
+#but, to keep the original pixel size - use this code 
+
+# for (plot_name in names(plots)) {
+#   
+#   #determine which raster corresponds to this plot based on the prefix name
+#   # (e.g., "aremark_typical" looks for an object named "aremark_hyperspec_mosaic")
+#   site_prefix <- sub("_(typical|limited)$", "", plot_name)
+#   raster_name <- paste0(site_prefix, "_hyperspec_mosaic")
+#   
+#   #check if the target raster actually exists in your R environment
+#   if (exists(raster_name, envir = .GlobalEnv)) {
+#     raster_obj <- get(raster_name, envir = .GlobalEnv)
+#     point_obj  <- plots[[plot_name]]
+#     
+#     #reproject the longlat point to match the specific raster's CRS
+#     point_projected <- terra::project(point_obj, terra::crs(raster_obj))
+#     
+#     #create the circular buffers in meters
+#     buf_400 <- terra::buffer(point_projected, width = r_400)
+#     buf_800 <- terra::buffer(point_projected, width = r_800)
+#     
+#     #crop and mask the rasters to the circles (mask = TRUE makes the outside NA)
+#     cropped_400 <- terra::crop(raster_obj, buf_400, mask = TRUE)
+#     cropped_800 <- terra::crop(raster_obj, buf_800, mask = TRUE)
+#     
+#     #save the output clipped rasters back into your global environment
+#     assign(paste0(plot_name, "_400m2"), cropped_400, envir = .GlobalEnv)
+#     assign(paste0(plot_name, "_800m2"), cropped_800, envir = .GlobalEnv)
+#     
+#     message("Successfully extracted plots for: ", plot_name)
+#   } else {
+#     warning("Could not find matching raster object named: ", raster_name)
+#   }
+# }
+# #check resolution and dimensions
+# res(rena_typical_400m2)
+# dim(rena_typical_400m2)
+
